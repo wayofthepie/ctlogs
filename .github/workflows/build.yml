@@ -18,18 +18,7 @@ jobs:
           toolchain: ${{ matrix.rust }}
           override: true
           components: rustfmt, clippy
-      - name: cache .cargo directory
-        uses: actions/cache@v1
-        with:
-          path: ~/.cargo
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-      - name: cache target
-        uses: actions/cache@v1
-        with:
-          path: target
-          key: ${{ runner.OS }}-build-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.OS }}-build-${{ hashFiles('**/Cargo.lock') }}
+      - uses: Swatinem/rust-cache@v1
       - name: compile
         uses: actions-rs/cargo@v1
         with:
@@ -72,6 +61,5 @@ jobs:
       with:
         command: build
         args: --release
-
     - name: publish
       run: echo "Not sure where to put it yet ..."
