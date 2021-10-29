@@ -1,7 +1,6 @@
-use again;
-use anyhow::{anyhow, Result};
+use again::{self, RetryPolicy};
+use anyhow::Result;
 use async_trait::async_trait;
-use http::StatusCode;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -50,36 +49,44 @@ pub trait CtClient {
 pub struct HttpCtClient<'a> {
     base_url: &'a str,
     client: Client,
+    timeout: Duration,
+    retry_policy: RetryPolicy,
 }
 
 impl<'a> HttpCtClient<'a> {
-    pub fn new(base_url: &'a str) -> Self {
+    pub fn new(base_url: &'a str, retry: Duration, timeout: Duration) -> Self {
+        let policy = RetryPolicy::fixed(retry).with_max_retries(10);
         let client = Client::new();
-        Self { base_url, client }
+        Self {
+            base_url,
+            client,
+            timeout,
+            retry_policy: policy,
+        }
     }
 }
-
-const NON_200_STATUS_ERROR: &str = "Did not receive a 200 OK response, bailing out.";
 
 #[async_trait]
 impl<'a> CtClient for HttpCtClient<'a> {
     async fn get_entries(&self, start: usize, end: usize) -> Result<Logs> {
-        println!("{:#?}, {}", start, end);
-        let response = again::retry(|| {
-            self.client
-                .get(&format!(
-                    "{}/get-entries?start={}&end={}",
-                    self.base_url, start, end
-                ))
-                .timeout(Duration::from_secs(20))
-                .send()
-        })
-        .await?;
-        if response.status() != StatusCode::OK {
-            return Err(anyhow!(NON_200_STATUS_ERROR));
-        }
+        let response = self
+            .retry_policy
+            .retry(|| async {
+                let r = self
+                    .client
+                    .get(&format!("{}/get-entries", self.base_url))
+                    .query(&[("start", start), ("end", end)])
+                    .timeout(self.timeout)
+                    .send()
+                    .await
+                    .and_then(|response| response.error_for_status());
+                eprintln!("{:?}", r);
+                r
+            })
+            .await?;
         let mut logs = response.json::<Logs>().await?;
         while logs.entries.len() < end - start + 1 {
+            eprintln!("entries");
             let len = logs.entries.len();
             let new_start = start + len;
             let next = self.get_entries(new_start, end).await?;
@@ -89,22 +96,28 @@ impl<'a> CtClient for HttpCtClient<'a> {
     }
 
     async fn get_tree_size(&self) -> Result<usize> {
-        let response = again::retry(|| {
-            self.client
-                .get(&format!("{}/get-sth", self.base_url))
-                .timeout(Duration::from_secs(20))
-                .send()
-        })
-        .await?;
-        if response.status() != StatusCode::OK {
-            return Err(anyhow!(NON_200_STATUS_ERROR));
-        }
+        let response = self
+            .retry_policy
+            .retry(|| async {
+                let r = self
+                    .client
+                    .get(&format!("{}/get-sth", self.base_url))
+                    .timeout(self.timeout)
+                    .send()
+                    .await
+                    .and_then(|response| response.error_for_status());
+                eprintln!("tree size {:#?}", r);
+                r
+            })
+            .await?;
         Ok(response.json::<STH>().await?.tree_size)
     }
 }
 
 #[cfg(test)]
 mod test {
+    use std::time::Duration;
+
     use super::{Logs, STH};
     use crate::client::{CtClient, HttpCtClient, LogEntry};
     use wiremock::{
@@ -113,6 +126,10 @@ mod test {
     };
 
     const LEAF_INPUT: &str = include_str!("../resources/test/leaf_input_with_cert");
+
+    fn default_client(uri: &str) -> HttpCtClient {
+        HttpCtClient::new(uri, Duration::from_millis(1), Duration::from_secs(20))
+    }
 
     #[tokio::test]
     async fn get_num_entries_should_fail_if_api_call_fails() {
@@ -123,14 +140,9 @@ mod test {
             .mount(&mock_server)
             .await;
         let uri = &mock_server.uri();
-        let client = HttpCtClient::new(uri);
+        let client = default_client(uri);
         let result = client.get_tree_size().await;
         assert!(result.is_err());
-        println!("{:#?}", result);
-        assert_eq!(
-            result.err().unwrap().to_string(),
-            "Did not receive a 200 OK response, bailing out."
-        );
     }
 
     #[tokio::test]
@@ -145,7 +157,7 @@ mod test {
             .mount(&mock_server)
             .await;
         let uri = &mock_server.uri();
-        let client = HttpCtClient::new(uri);
+        let client = default_client(uri);
         let result = client.get_tree_size().await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), expected_size);
@@ -162,13 +174,9 @@ mod test {
             .mount(&mock_server)
             .await;
         let uri = &mock_server.uri();
-        let client = HttpCtClient::new(uri);
+        let client = default_client(uri);
         let result = client.get_entries(0, 1).await;
         assert!(result.is_err());
-        assert_eq!(
-            result.err().unwrap().to_string(),
-            "Did not receive a 200 OK response, bailing out.",
-        );
     }
 
     #[tokio::test]
@@ -181,7 +189,7 @@ mod test {
             .mount(&mock_server)
             .await;
         let uri = &mock_server.uri();
-        let client = HttpCtClient::new(uri);
+        let client = default_client(uri);
         let result = client.get_entries(0, 1).await;
         assert!(result.is_err());
     }
@@ -209,9 +217,68 @@ mod test {
             .mount(&mock_server)
             .await;
         let uri = &mock_server.uri();
-        let client = HttpCtClient::new(uri);
+        let client = default_client(uri);
         let result = client.get_entries(0, 1).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), body);
+    }
+
+    #[tokio::test]
+    async fn get_entries_should_retry_on_failure() {
+        let body = Logs {
+            entries: vec![
+                LogEntry {
+                    leaf_input: LEAF_INPUT.to_owned(),
+                    extra_data: "".to_owned(),
+                },
+                LogEntry {
+                    leaf_input: LEAF_INPUT.to_owned(),
+                    extra_data: "".to_owned(),
+                },
+            ],
+        };
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/get-entries"))
+            .and(query_param("start", "0"))
+            .and(query_param("end", "1"))
+            .respond_with(ResponseTemplate::new(401))
+            .up_to_n_times(1)
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/get-entries"))
+            .and(query_param("start", "0"))
+            .and(query_param("end", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&body))
+            .mount(&mock_server)
+            .await;
+
+        let uri = &mock_server.uri();
+        let client = default_client(uri);
+        let result = client.get_entries(0, 1).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), body);
+    }
+
+    #[tokio::test]
+    async fn get_tree_size_should_retry_on_failure() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/get-sth"))
+            .respond_with(ResponseTemplate::new(400))
+            .up_to_n_times(1)
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/get-sth"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(STH { tree_size: 0 }))
+            .mount(&mock_server)
+            .await;
+        let uri = &mock_server.uri();
+        let client = default_client(uri);
+        let result = client.get_tree_size().await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 0);
     }
 }

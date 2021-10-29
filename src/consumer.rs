@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use crate::{
     client::{CtClient, HttpCtClient, Logs},
     Message,
@@ -24,7 +26,11 @@ pub struct NamePart {
 }
 
 pub async fn consume(base_url: &str, tx: Sender<Message>) -> Result<()> {
-    let client = HttpCtClient::new(base_url);
+    let client = HttpCtClient::new(
+        base_url,
+        Duration::from_millis(500),
+        Duration::from_secs(20),
+    );
     let tree_size = client.get_tree_size().await?;
     unfold((0, 0), |(start, end)| async move {
         (start < tree_size).then(|| {
