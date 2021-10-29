@@ -76,56 +76,11 @@ async fn parse_logs(logs: Logs) -> Result<Vec<Message>> {
 }
 
 fn parse_x509_bytes(bytes: &[u8], position: usize, msgs: &mut Vec<Message>) -> Result<()> {
-    match x509_parser::parse_x509_certificate(&bytes) {
+    match x509_parser::parse_x509_certificate(bytes) {
         Ok((_, cert)) => {
             msgs.push(Message {
                 entry: format!("{:#?}", cert.tbs_certificate),
             });
-
-            //let extensions = cert.extensions();
-            //// skip formatting this for now, the ".17" gets prefixed with a space, doesnt break
-            //// but looks weird
-            //#[rustfmt::skip]
-            //let san_oid = oid!(2.5.29.17);
-            //let san = extensions.get(&san_oid);
-            //if let Some(san) = san {
-            //    if let ParsedExtension::SubjectAlternativeName(SubjectAlternativeName {
-            //        general_names,
-            //    }) = san.parsed_extension()
-            //    {
-            //        for name in general_names.iter() {
-            //            match name {
-            //                GeneralName::OtherName(_, bytes) => {
-            //                    // skip
-            //                }
-            //                GeneralName::RFC822Name(rfc822) => {
-            //                    msgs.push(Message {
-            //                        entry: rfc822.to_string(),
-            //                    });
-            //                }
-            //                GeneralName::DNSName(dns) => {
-            //                    msgs.push(Message {
-            //                        entry: dns.to_string(),
-            //                    });
-            //                }
-            //                GeneralName::DirectoryName(_) => {
-            //                    // skip
-            //                }
-            //                GeneralName::URI(uri) => {
-            //                    msgs.push(Message {
-            //                        entry: uri.to_string(),
-            //                    });
-            //                }
-            //                GeneralName::IPAddress(addr) => {
-            //                    // skip
-            //                }
-            //                GeneralName::RegisteredID(_) => {
-            //                    // skip
-            //                }
-            //            }
-            //        }
-            //    }
-            //};
         }
         Err(err) => eprintln!("Error at position {}: {}", position, err),
     }
