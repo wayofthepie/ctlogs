@@ -1,8 +1,4 @@
-use crate::{
-    client::{CtClient, Logs},
-    Message,
-};
-
+use crate::client::{CtClient, Logs};
 use anyhow::{anyhow, Result};
 use der_parser::oid;
 use futures::stream::{unfold, StreamExt, TryStreamExt};
@@ -26,6 +22,12 @@ pub struct CertInfo {
 pub struct NamePart {
     tag: String,
     value: String,
+}
+
+#[derive(Debug)]
+pub struct Message {
+    pub position: usize,
+    pub result: anyhow::Result<Vec<String>>,
 }
 
 pub async fn consume(client: impl CtClient, tx: Sender<Message>) -> Result<()> {
@@ -145,11 +147,8 @@ fn decode_san(san: &X509Extension) -> Vec<String> {
 
 #[cfg(test)]
 mod test {
-    use super::consume;
-    use crate::{
-        client::{CtClient, LogEntry, Logs},
-        Message,
-    };
+    use super::{consume, Message};
+    use crate::client::{CtClient, LogEntry, Logs};
     use async_trait::async_trait;
     use std::{
         mem,

@@ -8,12 +8,6 @@ mod parser;
 
 const CT_LOGS_URL: &str = "https://ct.googleapis.com/logs/argon2021/ct/v1";
 
-#[derive(Debug)]
-pub struct Message {
-    position: usize,
-    result: anyhow::Result<Vec<String>>,
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
@@ -22,7 +16,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .close_callback(|| println!("closed"))
         .connect("nats://localhost:4222")
         .await?;
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<Message>(100);
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<consumer::Message>(100);
     let client = HttpCtClient::new(
         CT_LOGS_URL,
         Duration::from_millis(500),
