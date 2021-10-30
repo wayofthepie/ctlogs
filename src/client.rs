@@ -69,7 +69,7 @@ impl<'a> HttpCtClient<'a> {
 #[async_trait]
 impl<'a> CtClient for HttpCtClient<'a> {
     async fn get_entries(&self, start: usize, end: usize) -> Result<Logs> {
-        let response = self
+        let mut logs = self
             .retry_policy
             .retry_if(
                 || async {
@@ -79,14 +79,15 @@ impl<'a> CtClient for HttpCtClient<'a> {
                         .timeout(self.timeout)
                         .send()
                         .await
-                        .and_then(|response| response.error_for_status())
+                        .and_then(|response| response.error_for_status())?
+                        .json::<Logs>()
+                        .await
                 },
                 |err: &reqwest::Error| {
                     reqwest::Error::is_status(err) || reqwest::Error::is_timeout(err)
                 },
             )
             .await?;
-        let mut logs = response.json::<Logs>().await?;
         while logs.entries.len() < end - start + 1 {
             let len = logs.entries.len();
             let new_start = start + len;
@@ -301,7 +302,6 @@ mod test {
         let uri = &mock_server.uri();
         let client = HttpCtClient::new(uri, Duration::from_millis(10), Duration::from_millis(10));
         let result = client.get_tree_size().await;
-        println!("{:#?}", result);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 0);
     }
