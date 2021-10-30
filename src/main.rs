@@ -29,7 +29,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let len = bytes.len();
                     // stay below 1MiB limit
                     if len < 1048576 {
-                        nc.publish("domains", bytes).await?
+                        let publish_result = nc.publish("domains", bytes).await;
+                        if let Err(err) = publish_result {
+                            eprintln!("Error occurred publishing nats message: {:?}", err);
+                        }
                     }
                 }
             }
