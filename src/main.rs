@@ -1,3 +1,7 @@
+use std::time::Duration;
+
+use crate::client::HttpCtClient;
+
 pub mod client;
 mod consumer;
 mod parser;
@@ -18,7 +22,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connect("nats://localhost:4222")
         .await?;
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Message>(100);
-    let handle = tokio::spawn(consumer::consume(CT_LOGS_URL, tx));
+    let client = HttpCtClient::new(
+        CT_LOGS_URL,
+        Duration::from_millis(500),
+        Duration::from_secs(20),
+    );
+    let handle = tokio::spawn(consumer::consume(client, tx));
     while let Some(msg) = rx.recv().await {
         let bytes = msg.entry.as_bytes();
         let len = bytes.len();

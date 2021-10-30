@@ -9,7 +9,6 @@ jobs:
           - stable
           - beta
           - nightly
-          - 1.56.0
     steps:
       - uses: actions/checkout@v2
       - uses: actions-rs/toolchain@v1
@@ -28,10 +27,6 @@ jobs:
         with:
           version: '0.18.3'
           args: '--avoid-cfg-tarpaulin -- --test-threads 1'
-      - name: Upload to codecov.io
-        uses: codecov/codecov-action@v1.0.2
-        with:
-          token: ${{secrets.CODECOV_TOKEN}}
       - name: check formatting
         uses: actions-rs/cargo@v1
         with:
@@ -42,6 +37,11 @@ jobs:
         with:
           command: clippy
           args: -- -D warnings
+      - if: matrix.rust == 'stable'
+        name: Upload to codecov.io
+        uses: codecov/codecov-action@v1.0.2
+        with:
+          token: ${{secrets.CODECOV_TOKEN}}
   cd:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
@@ -51,7 +51,6 @@ jobs:
           - stable
           - beta
           - nightly
-          - 1.56.0
     needs: ci
     steps:
     - uses: actions/checkout@v2

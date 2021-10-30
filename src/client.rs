@@ -72,21 +72,17 @@ impl<'a> CtClient for HttpCtClient<'a> {
         let response = self
             .retry_policy
             .retry(|| async {
-                let r = self
-                    .client
+                self.client
                     .get(&format!("{}/get-entries", self.base_url))
                     .query(&[("start", start), ("end", end)])
                     .timeout(self.timeout)
                     .send()
                     .await
-                    .and_then(|response| response.error_for_status());
-                eprintln!("{:?}", r);
-                r
+                    .and_then(|response| response.error_for_status())
             })
             .await?;
         let mut logs = response.json::<Logs>().await?;
         while logs.entries.len() < end - start + 1 {
-            eprintln!("entries");
             let len = logs.entries.len();
             let new_start = start + len;
             let next = self.get_entries(new_start, end).await?;
@@ -99,15 +95,12 @@ impl<'a> CtClient for HttpCtClient<'a> {
         let response = self
             .retry_policy
             .retry(|| async {
-                let r = self
-                    .client
+                self.client
                     .get(&format!("{}/get-sth", self.base_url))
                     .timeout(self.timeout)
                     .send()
                     .await
-                    .and_then(|response| response.error_for_status());
-                eprintln!("tree size {:#?}", r);
-                r
+                    .and_then(|response| response.error_for_status())
             })
             .await?;
         Ok(response.json::<STH>().await?.tree_size)

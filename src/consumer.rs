@@ -1,13 +1,13 @@
-use std::time::Duration;
-
 use crate::{
-    client::{CtClient, HttpCtClient, Logs},
+    client::{CtClient, Logs},
     Message,
 };
 use anyhow::Result;
+use der_parser::oid;
 use futures::stream::{unfold, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::{signal::unix::SignalKind, sync::mpsc::Sender};
+use x509_parser::extensions::{GeneralName, ParsedExtension, SubjectAlternativeName};
 
 const RETRIEVAL_LIMIT: usize = 31;
 
@@ -25,12 +25,7 @@ pub struct NamePart {
     value: String,
 }
 
-pub async fn consume(base_url: &str, tx: Sender<Message>) -> Result<()> {
-    let client = HttpCtClient::new(
-        base_url,
-        Duration::from_millis(500),
-        Duration::from_secs(20),
-    );
+pub async fn consume(client: impl CtClient, tx: Sender<Message>) -> Result<()> {
     let tree_size = client.get_tree_size().await?;
     unfold((0, 0), |(start, end)| async move {
         (start < tree_size).then(|| {
@@ -78,6 +73,50 @@ async fn parse_logs(logs: Logs) -> Result<Vec<Message>> {
 fn parse_x509_bytes(bytes: &[u8], position: usize, msgs: &mut Vec<Message>) -> Result<()> {
     match x509_parser::parse_x509_certificate(bytes) {
         Ok((_, cert)) => {
+            let extensions = cert.extensions();
+            // skip formatting this for now, the ".17" gets prefixed with a space, doesnt break
+            // but looks weird
+            #[rustfmt::skip]
+            let san_oid = oid!(2.5.29.17);
+            let san = extensions.get(&san_oid);
+            if let Some(san) = san {
+                if let ParsedExtension::SubjectAlternativeName(SubjectAlternativeName {
+                    general_names,
+                }) = san.parsed_extension()
+                {
+                    for name in general_names.iter() {
+                        match name {
+                            GeneralName::OtherName(_, _) => {
+                                // skip
+                            }
+                            GeneralName::RFC822Name(rfc822) => {
+                                msgs.push(Message {
+                                    entry: rfc822.to_string(),
+                                });
+                            }
+                            GeneralName::DNSName(dns) => {
+                                msgs.push(Message {
+                                    entry: dns.to_string(),
+                                });
+                            }
+                            GeneralName::DirectoryName(_) => {
+                                // skip
+                            }
+                            GeneralName::URI(uri) => {
+                                msgs.push(Message {
+                                    entry: uri.to_string(),
+                                });
+                            }
+                            GeneralName::IPAddress(_) => {
+                                // skip
+                            }
+                            GeneralName::RegisteredID(_) => {
+                                // skip
+                            }
+                        }
+                    }
+                }
+            };
             msgs.push(Message {
                 entry: format!("{:#?}", cert.tbs_certificate),
             });
