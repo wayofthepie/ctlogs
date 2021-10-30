@@ -4,6 +4,7 @@ jobs:
   ci:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         rust:
           - stable
@@ -45,19 +46,13 @@ jobs:
   cd:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
-    strategy:
-      matrix:
-        rust:
-          - stable
-          - beta
-          - nightly
     needs: ci
     steps:
     - uses: actions/checkout@v2
     - uses: actions-rs/toolchain@v1
       with:
         profile: minimal
-        toolchain: ${{ matrix.rust }}
+        toolchain: stable
         override: true
         components: rustfmt, clippy
     - name: build release artifact
