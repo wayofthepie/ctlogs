@@ -1,10 +1,8 @@
-use std::time::Duration;
-
-use crate::client::HttpCtClient;
-
 pub mod client;
 mod consumer;
 mod parser;
+use crate::client::HttpCtClient;
+use std::time::Duration;
 
 const CT_LOGS_URL: &str = "https://ct.googleapis.com/logs/argon2021/ct/v1";
 

@@ -1,12 +1,9 @@
-use crate::client::{CtClient, Logs};
-use anyhow::{anyhow, Result};
-use der_parser::oid;
+use crate::client::CtClient;
+use crate::parser::parse_logs;
+use anyhow::Result;
 use futures::stream::{unfold, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::{signal::unix::SignalKind, sync::mpsc::Sender};
-use x509_parser::extensions::{
-    GeneralName, ParsedExtension, SubjectAlternativeName, X509Extension,
-};
 
 const RETRIEVAL_LIMIT: usize = 31;
 
@@ -63,86 +60,6 @@ async fn sigint_handler() -> Result<()> {
     signal.recv().await;
     eprintln!("\nAttempting to gracefully let tasks complete.\n");
     Ok(())
-}
-
-async fn parse_logs(logs: Logs) -> Vec<(usize, Result<Vec<String>>)> {
-    let mut msgs = vec![];
-    for (position, entry) in logs.entries.iter().enumerate() {
-        match base64::decode(&entry.leaf_input) {
-            Ok(bytes) => {
-                let entry_type = bytes[10] + bytes[11];
-                if entry_type == 0 {
-                    let cert_end_index =
-                        u32::from_be_bytes([0, bytes[12], bytes[13], bytes[14]]) as usize + 15;
-                    msgs.push((
-                        position,
-                        parse_x509_bytes(&bytes[15..cert_end_index], position),
-                    ));
-                }
-            }
-            Err(_) => msgs.push((
-                position,
-                Err(anyhow!("Failed to base64 decode certificate")),
-            )),
-        }
-    }
-    msgs
-}
-
-fn parse_x509_bytes(bytes: &[u8], position: usize) -> Result<Vec<String>> {
-    match x509_parser::parse_x509_certificate(bytes) {
-        Ok((_, cert)) => {
-            let extensions = cert.extensions();
-            // skip formatting this for now, the ".17" gets prefixed with a space, doesnt break
-            // but looks weird
-            #[rustfmt::skip]
-            let san_oid = oid!(2.5.29.17);
-            Ok(extensions
-                .iter()
-                .filter(|extension| extension.oid == san_oid)
-                .map(|san| decode_san(san))
-                .flatten()
-                .collect())
-        }
-        Err(err) => Err(anyhow!("Error at position {}: {}", position, err)),
-    }
-}
-
-fn decode_san(san: &X509Extension) -> Vec<String> {
-    if let ParsedExtension::SubjectAlternativeName(SubjectAlternativeName { general_names }) =
-        san.parsed_extension()
-    {
-        general_names.iter().fold(Vec::new(), |mut acc, name| {
-            match name {
-                GeneralName::OtherName(_, _) => {
-                    // skip
-                }
-                GeneralName::RFC822Name(rfc822) => {
-                    acc.push(rfc822.to_string());
-                }
-                GeneralName::DNSName(dns) => {
-                    acc.push(dns.to_string());
-                }
-                GeneralName::DirectoryName(_) => {
-                    // skip
-                }
-                GeneralName::URI(uri) => {
-                    acc.push(uri.to_string());
-                }
-                GeneralName::IPAddress(_) => {
-                    // skip
-                }
-                GeneralName::RegisteredID(_) => {
-                    // skip
-                }
-                GeneralName::X400Address(_) => todo!(),
-                GeneralName::EDIPartyName(_) => todo!(),
-            }
-            acc
-        })
-    } else {
-        vec![]
-    }
 }
 
 #[cfg(test)]
