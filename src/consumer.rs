@@ -2,7 +2,8 @@ use crate::{
     client::{CtClient, Logs},
     Message,
 };
-use anyhow::Result;
+
+use anyhow::{anyhow, Result};
 use der_parser::oid;
 use futures::stream::{unfold, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
@@ -42,8 +43,12 @@ pub async fn consume(client: impl CtClient, tx: Sender<Message>) -> Result<()> {
     .buffer_unordered(20)
     .map_ok(parse_logs)
     .try_for_each(|fut| async {
-        for msg in fut.await? {
-            tx.send(msg).await?;
+        for msg in fut.await {
+            tx.send(Message {
+                position: msg.0,
+                result: msg.1,
+            })
+            .await?;
         }
         Ok(())
     })
@@ -58,21 +63,31 @@ async fn sigint_handler() -> Result<()> {
     Ok(())
 }
 
-async fn parse_logs(logs: Logs) -> Result<Vec<Message>> {
+async fn parse_logs(logs: Logs) -> Vec<(usize, Result<Vec<String>>)> {
     let mut msgs = vec![];
     for (position, entry) in logs.entries.iter().enumerate() {
-        let bytes = base64::decode(&entry.leaf_input)?;
-        let entry_type = bytes[10] + bytes[11];
-        if entry_type == 0 {
-            let cert_end_index =
-                u32::from_be_bytes([0, bytes[12], bytes[13], bytes[14]]) as usize + 15;
-            parse_x509_bytes(&bytes[15..cert_end_index], position, &mut msgs)?;
+        match base64::decode(&entry.leaf_input) {
+            Ok(bytes) => {
+                let entry_type = bytes[10] + bytes[11];
+                if entry_type == 0 {
+                    let cert_end_index =
+                        u32::from_be_bytes([0, bytes[12], bytes[13], bytes[14]]) as usize + 15;
+                    msgs.push((
+                        position,
+                        parse_x509_bytes(&bytes[15..cert_end_index], position),
+                    ));
+                }
+            }
+            Err(_) => msgs.push((
+                position,
+                Err(anyhow!("Failed to base64 decode certificate")),
+            )),
         }
     }
-    Ok(msgs)
+    msgs
 }
 
-fn parse_x509_bytes(bytes: &[u8], position: usize, msgs: &mut Vec<Message>) -> Result<()> {
+fn parse_x509_bytes(bytes: &[u8], position: usize) -> Result<Vec<String>> {
     match x509_parser::parse_x509_certificate(bytes) {
         Ok((_, cert)) => {
             let extensions = cert.extensions();
@@ -80,42 +95,37 @@ fn parse_x509_bytes(bytes: &[u8], position: usize, msgs: &mut Vec<Message>) -> R
             // but looks weird
             #[rustfmt::skip]
             let san_oid = oid!(2.5.29.17);
-            extensions
+            Ok(extensions
                 .iter()
                 .filter(|extension| extension.oid == san_oid)
-                .for_each(|san| decode_san(san, msgs));
+                .map(|san| decode_san(san))
+                .flatten()
+                .collect())
         }
-        Err(err) => eprintln!("Error at position {}: {}", position, err),
+        Err(err) => Err(anyhow!("Error at position {}: {}", position, err)),
     }
-    Ok(())
 }
 
-fn decode_san(san: &X509Extension, msgs: &mut Vec<Message>) {
+fn decode_san(san: &X509Extension) -> Vec<String> {
     if let ParsedExtension::SubjectAlternativeName(SubjectAlternativeName { general_names }) =
         san.parsed_extension()
     {
-        for name in general_names.iter() {
+        general_names.iter().fold(Vec::new(), |mut acc, name| {
             match name {
                 GeneralName::OtherName(_, _) => {
                     // skip
                 }
                 GeneralName::RFC822Name(rfc822) => {
-                    msgs.push(Message {
-                        entry: rfc822.to_string(),
-                    });
+                    acc.push(rfc822.to_string());
                 }
                 GeneralName::DNSName(dns) => {
-                    msgs.push(Message {
-                        entry: dns.to_string(),
-                    });
+                    acc.push(dns.to_string());
                 }
                 GeneralName::DirectoryName(_) => {
                     // skip
                 }
                 GeneralName::URI(uri) => {
-                    msgs.push(Message {
-                        entry: uri.to_string(),
-                    });
+                    acc.push(uri.to_string());
                 }
                 GeneralName::IPAddress(_) => {
                     // skip
@@ -126,7 +136,10 @@ fn decode_san(san: &X509Extension, msgs: &mut Vec<Message>) {
                 GeneralName::X400Address(_) => todo!(),
                 GeneralName::EDIPartyName(_) => todo!(),
             }
-        }
+            acc
+        })
+    } else {
+        vec![]
     }
 }
 
@@ -187,10 +200,36 @@ mod test {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Message>(100);
         let handle = tokio::spawn(consume(client, tx));
         let mut count = 0;
-        while rx.recv().await.is_some() {
-            count += 1;
+        while let Some(msg) = rx.recv().await {
+            assert!(msg.result.is_ok());
+            for _ in msg.result.unwrap() {
+                count += 1;
+            }
         }
         handle.await.unwrap().unwrap();
         assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn consume_should_return_error_if_parsing_cert_fails() {
+        let leaf_input = include_str!("../resources/test/leaf_input_with_invalid_cert").trim();
+        let entry = LogEntry {
+            leaf_input: leaf_input.to_owned(),
+            ..LogEntry::default()
+        };
+        let logs = Arc::new(Mutex::new(Logs {
+            entries: vec![entry],
+        }));
+        let client = FakeClient { logs };
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Message>(100);
+        let handle = tokio::spawn(consume(client, tx));
+        let mut count = 0;
+        while let Some(msg) = rx.recv().await {
+            assert!(msg.result.is_err());
+            assert!(format!("{}", msg.result.err().unwrap()).contains("Error at position 0"));
+            count += 1;
+        }
+        handle.await.unwrap().unwrap();
+        assert_eq!(count, 1);
     }
 }

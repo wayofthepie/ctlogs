@@ -10,7 +10,8 @@ const CT_LOGS_URL: &str = "https://ct.googleapis.com/logs/argon2021/ct/v1";
 
 #[derive(Debug)]
 pub struct Message {
-    entry: String,
+    position: usize,
+    result: anyhow::Result<Vec<String>>,
 }
 
 #[tokio::main]
@@ -29,11 +30,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let handle = tokio::spawn(consumer::consume(client, tx));
     while let Some(msg) = rx.recv().await {
-        let bytes = msg.entry.as_bytes();
-        let len = bytes.len();
-        // stay below 1MiB limit
-        if len < 1048576 {
-            nc.publish("domains", bytes).await?
+        match msg.result {
+            Ok(result) => {
+                for domain in result {
+                    let bytes = domain.as_bytes();
+                    let len = bytes.len();
+                    // stay below 1MiB limit
+                    if len < 1048576 {
+                        nc.publish("domains", bytes).await?
+                    }
+                }
+            }
+            Err(_) => eprintln!("failed"),
         }
     }
     handle.await??;
