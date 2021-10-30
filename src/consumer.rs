@@ -7,7 +7,9 @@ use der_parser::oid;
 use futures::stream::{unfold, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::{signal::unix::SignalKind, sync::mpsc::Sender};
-use x509_parser::extensions::{GeneralName, ParsedExtension, SubjectAlternativeName};
+use x509_parser::extensions::{
+    GeneralName, ParsedExtension, SubjectAlternativeName, X509Extension,
+};
 
 const RETRIEVAL_LIMIT: usize = 31;
 
@@ -78,50 +80,52 @@ fn parse_x509_bytes(bytes: &[u8], position: usize, msgs: &mut Vec<Message>) -> R
             // but looks weird
             #[rustfmt::skip]
             let san_oid = oid!(2.5.29.17);
-            let san = extensions.get(&san_oid);
-            if let Some(san) = san {
-                if let ParsedExtension::SubjectAlternativeName(SubjectAlternativeName {
-                    general_names,
-                }) = san.parsed_extension()
-                {
-                    for name in general_names.iter() {
-                        match name {
-                            GeneralName::OtherName(_, _) => {
-                                // skip
-                            }
-                            GeneralName::RFC822Name(rfc822) => {
-                                msgs.push(Message {
-                                    entry: rfc822.to_string(),
-                                });
-                            }
-                            GeneralName::DNSName(dns) => {
-                                msgs.push(Message {
-                                    entry: dns.to_string(),
-                                });
-                            }
-                            GeneralName::DirectoryName(_) => {
-                                // skip
-                            }
-                            GeneralName::URI(uri) => {
-                                msgs.push(Message {
-                                    entry: uri.to_string(),
-                                });
-                            }
-                            GeneralName::IPAddress(_) => {
-                                // skip
-                            }
-                            GeneralName::RegisteredID(_) => {
-                                // skip
-                            }
-                        }
-                    }
-                }
-            };
-            msgs.push(Message {
-                entry: format!("{:#?}", cert.tbs_certificate),
-            });
+            extensions
+                .iter()
+                .filter(|extension| extension.oid == san_oid)
+                .for_each(|san| decode_san(san, msgs));
         }
         Err(err) => eprintln!("Error at position {}: {}", position, err),
     }
     Ok(())
+}
+
+fn decode_san(san: &X509Extension, msgs: &mut Vec<Message>) {
+    if let ParsedExtension::SubjectAlternativeName(SubjectAlternativeName { general_names }) =
+        san.parsed_extension()
+    {
+        for name in general_names.iter() {
+            match name {
+                GeneralName::OtherName(_, _) => {
+                    // skip
+                }
+                GeneralName::RFC822Name(rfc822) => {
+                    msgs.push(Message {
+                        entry: rfc822.to_string(),
+                    });
+                }
+                GeneralName::DNSName(dns) => {
+                    msgs.push(Message {
+                        entry: dns.to_string(),
+                    });
+                }
+                GeneralName::DirectoryName(_) => {
+                    // skip
+                }
+                GeneralName::URI(uri) => {
+                    msgs.push(Message {
+                        entry: uri.to_string(),
+                    });
+                }
+                GeneralName::IPAddress(_) => {
+                    // skip
+                }
+                GeneralName::RegisteredID(_) => {
+                    // skip
+                }
+                GeneralName::X400Address(_) => todo!(),
+                GeneralName::EDIPartyName(_) => todo!(),
+            }
+        }
+    }
 }
