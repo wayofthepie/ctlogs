@@ -129,3 +129,68 @@ fn decode_san(san: &X509Extension, msgs: &mut Vec<Message>) {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::consume;
+    use crate::{
+        client::{CtClient, LogEntry, Logs},
+        Message,
+    };
+    use async_trait::async_trait;
+    use std::{
+        mem,
+        ops::{Deref, DerefMut},
+        sync::Arc,
+    };
+    use tokio::sync::Mutex;
+
+    struct FakeClient {
+        logs: Arc<Mutex<Logs>>,
+    }
+
+    #[async_trait]
+    impl<'a> CtClient for FakeClient {
+        async fn get_entries(&self, _: usize, _: usize) -> anyhow::Result<Logs> {
+            let logs = self.logs.clone();
+            let mut guard = logs.lock().await;
+            let logs = mem::replace(&mut *(guard.deref_mut()), Logs { entries: vec![] });
+            Ok(logs)
+        }
+
+        async fn get_tree_size(&self) -> anyhow::Result<usize> {
+            Ok(self.logs.clone().lock().await.deref().entries.len())
+        }
+    }
+
+    #[tokio::test]
+    async fn consume_should_return_if_tree_size_is_zero() {
+        let client = FakeClient {
+            logs: Arc::new(Mutex::new(Logs { entries: vec![] })),
+        };
+        let (tx, _) = tokio::sync::mpsc::channel::<Message>(100);
+        let result = consume(client, tx).await;
+        assert!(result.is_ok())
+    }
+
+    #[tokio::test]
+    async fn consume_should_send_all_logs_on_channel() {
+        let leaf_input = include_str!("../resources/test/leaf_input_with_cert").trim();
+        let entry = LogEntry {
+            leaf_input: leaf_input.to_owned(),
+            ..LogEntry::default()
+        };
+        let logs = Arc::new(Mutex::new(Logs {
+            entries: vec![entry],
+        }));
+        let client = FakeClient { logs };
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Message>(100);
+        let handle = tokio::spawn(consume(client, tx));
+        let mut count = 0;
+        while rx.recv().await.is_some() {
+            count += 1;
+        }
+        handle.await.unwrap().unwrap();
+        assert_eq!(count, 2);
+    }
+}

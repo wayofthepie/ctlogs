@@ -5,12 +5,12 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-#[derive(Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[derive(Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
 pub struct Logs {
     pub entries: Vec<LogEntry>,
 }
 
-#[derive(Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[derive(Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
 pub struct LogEntry {
     /// The `leaf_input` field is a `String` of base64 encoded data. The data is a DER encoded
     /// MerkleTreeHeader, which has the following structure.
@@ -18,15 +18,15 @@ pub struct LogEntry {
     /// [0] [1] [2..=9] [10..=11] [12..=14] [15..]
     /// |   |     |        |         |      |
     /// |   |     |        |         |      |- rest
-    /// |   |     |        |         |      
+    /// |   |     |        |         |
     /// |   |     |        |         |- length
-    /// |   |     |        |               
+    /// |   |     |        |
     /// |   |     |        | - log entry type
-    /// |   |     |                       
+    /// |   |     |
     /// |   |     | - timestamp
-    /// |   |                            
+    /// |   |
     /// |   | - signature type
-    /// |                               
+    /// |
     /// | - version
     /// ```
     ///
