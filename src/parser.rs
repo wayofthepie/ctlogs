@@ -40,7 +40,7 @@ fn parse_x509_bytes(bytes: &[u8], position: usize) -> Result<Vec<String>> {
             Ok(extensions
                 .iter()
                 .filter(|extension| extension.oid == san_oid)
-                .map(|san| decode_san(san))
+                .map(decode_san)
                 .flatten()
                 .collect())
         }
