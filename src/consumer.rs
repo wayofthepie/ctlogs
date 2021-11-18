@@ -65,7 +65,7 @@ async fn sigint_handler() -> Result<()> {
 #[cfg(test)]
 mod test {
     use super::{consume, Message};
-    use crate::client::{CtClient, LogEntry, Logs};
+    use crate::client::{CtClient, LogEntry, Logs, Operators};
     use async_trait::async_trait;
     use std::{
         mem,
@@ -80,6 +80,10 @@ mod test {
 
     #[async_trait]
     impl<'a> CtClient for FakeClient {
+        async fn list_log_operators(&self, _: &str) -> anyhow::Result<Operators> {
+            todo!()
+        }
+
         async fn get_entries(&self, _: usize, _: usize) -> anyhow::Result<Logs> {
             let logs = self.logs.clone();
             let mut guard = logs.lock().await;

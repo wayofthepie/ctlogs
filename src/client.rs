@@ -1,5 +1,4 @@
 use again::{self, RetryPolicy};
-use anyhow::Result;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -39,10 +38,69 @@ pub struct STH {
     pub tree_size: usize,
 }
 
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Operators {
+    pub operators: Vec<Operator>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Operator {
+    pub name: String,
+    pub email: Vec<String>,
+    pub logs: Vec<Log>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Log {
+    pub description: String,
+    pub log_id: String,
+    pub key: String,
+    pub url: String,
+    pub mmd: i64,
+    pub state: State,
+    pub temporal_interval: Option<TemporalInterval>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct State {
+    pub usable: Option<Usable>,
+    pub readonly: Option<Readonly>,
+    pub retired: Option<Retired>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Usable {
+    pub timestamp: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Readonly {
+    pub timestamp: String,
+    pub final_tree_head: FinalTreeHead,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinalTreeHead {
+    pub sha256_root_hash: String,
+    pub tree_size: i64,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Retired {
+    pub timestamp: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TemporalInterval {
+    pub start_inclusive: String,
+    pub end_exclusive: String,
+}
+
 #[async_trait]
 pub trait CtClient {
-    async fn get_entries(&self, start: usize, end: usize) -> Result<Logs>;
-    async fn get_tree_size(&self) -> Result<usize>;
+    async fn list_log_operators(&self, base_url: &str) -> anyhow::Result<Operators>;
+    async fn get_entries(&self, start: usize, end: usize) -> anyhow::Result<Logs>;
+    async fn get_tree_size(&self) -> anyhow::Result<usize>;
 }
 
 #[derive(Clone)]
@@ -68,7 +126,31 @@ impl<'a> HttpCtClient<'a> {
 
 #[async_trait]
 impl<'a> CtClient for HttpCtClient<'a> {
-    async fn get_entries(&self, start: usize, end: usize) -> Result<Logs> {
+    /// The base url for listing log operators is different from the base url for other
+    /// operations on [HttpCtClient](self::HttpCtClient).
+    async fn list_log_operators(&self, base_url: &str) -> anyhow::Result<Operators> {
+        let operators = self
+            .retry_policy
+            .retry_if(
+                || async {
+                    self.client
+                        .get(&format!("{}/log_list.json", base_url))
+                        .timeout(self.timeout)
+                        .send()
+                        .await
+                        .and_then(|response| response.error_for_status())?
+                        .json::<Operators>()
+                        .await
+                },
+                |err: &reqwest::Error| {
+                    reqwest::Error::is_status(err) || reqwest::Error::is_timeout(err)
+                },
+            )
+            .await?;
+        Ok(operators)
+    }
+
+    async fn get_entries(&self, start: usize, end: usize) -> anyhow::Result<Logs> {
         let mut logs = self
             .retry_policy
             .retry_if(
@@ -97,7 +179,7 @@ impl<'a> CtClient for HttpCtClient<'a> {
         Ok(logs)
     }
 
-    async fn get_tree_size(&self) -> Result<usize> {
+    async fn get_tree_size(&self) -> anyhow::Result<usize> {
         let response = self
             .retry_policy
             .retry_if(
@@ -120,8 +202,8 @@ impl<'a> CtClient for HttpCtClient<'a> {
 
 #[cfg(test)]
 mod test {
-    use super::{Logs, STH};
-    use crate::client::{CtClient, HttpCtClient, LogEntry};
+    use super::{Logs, Operator, STH};
+    use crate::client::{CtClient, HttpCtClient, LogEntry, Operators};
     use std::time::Duration;
     use wiremock::{
         matchers::{method, path, query_param},
@@ -339,6 +421,29 @@ mod test {
         let uri = &mock_server.uri();
         let client = HttpCtClient::new(uri, Duration::from_millis(10), Duration::from_millis(10));
         let result = client.get_entries(0, 1).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), body);
+    }
+
+    #[tokio::test]
+    async fn list_log_operators_should_return_operators() {
+        let body = Operators {
+            operators: vec![Operator {
+                name: "Google".to_owned(),
+                email: vec!["google-ct-logs@googlegroups.com".to_owned()],
+                logs: vec![],
+            }],
+        };
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/log_list.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&body))
+            .up_to_n_times(1)
+            .mount(&mock_server)
+            .await;
+        let uri = mock_server.uri();
+        let client = default_client(&uri);
+        let result = client.list_log_operators(&uri).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), body);
     }
