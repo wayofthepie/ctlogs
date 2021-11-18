@@ -80,7 +80,7 @@ mod test {
 
     #[async_trait]
     impl<'a> CtClient for FakeClient {
-        async fn list_log_operators(&self, _: &str) -> anyhow::Result<Operators> {
+        async fn list_log_operators(&self) -> anyhow::Result<Operators> {
             todo!()
         }
 

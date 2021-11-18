@@ -1,5 +1,6 @@
 use again::{self, RetryPolicy};
 use async_trait::async_trait;
+use derive_builder::Builder;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -98,43 +99,33 @@ pub struct TemporalInterval {
 
 #[async_trait]
 pub trait CtClient {
-    async fn list_log_operators(&self, base_url: &str) -> anyhow::Result<Operators>;
+    async fn list_log_operators(&self) -> anyhow::Result<Operators>;
     async fn get_entries(&self, start: usize, end: usize) -> anyhow::Result<Logs>;
     async fn get_tree_size(&self) -> anyhow::Result<usize>;
 }
 
-#[derive(Clone)]
+#[derive(Clone, Builder)]
+#[builder(setter(into))]
 pub struct HttpCtClient<'a> {
     base_url: &'a str,
+    log_operators_base_url: &'a str,
+    #[builder(default = "Client::new()")]
     client: Client,
+    #[builder(default = "Duration::from_secs(20)")]
     timeout: Duration,
+    #[builder(default = "RetryPolicy::fixed(Duration::from_millis(100)).with_max_retries(10)")]
     retry_policy: RetryPolicy,
-}
-
-impl<'a> HttpCtClient<'a> {
-    pub fn new(base_url: &'a str, retry: Duration, timeout: Duration) -> Self {
-        let policy = RetryPolicy::fixed(retry).with_max_retries(10);
-        let client = Client::new();
-        Self {
-            base_url,
-            client,
-            timeout,
-            retry_policy: policy,
-        }
-    }
 }
 
 #[async_trait]
 impl<'a> CtClient for HttpCtClient<'a> {
-    /// The base url for listing log operators is different from the base url for other
-    /// operations on [HttpCtClient](self::HttpCtClient).
-    async fn list_log_operators(&self, base_url: &str) -> anyhow::Result<Operators> {
+    async fn list_log_operators(&self) -> anyhow::Result<Operators> {
         let operators = self
             .retry_policy
             .retry_if(
                 || async {
                     self.client
-                        .get(&format!("{}/log_list.json", base_url))
+                        .get(&format!("{}/log_list.json", self.log_operators_base_url))
                         .timeout(self.timeout)
                         .send()
                         .await
@@ -202,8 +193,9 @@ impl<'a> CtClient for HttpCtClient<'a> {
 
 #[cfg(test)]
 mod test {
-    use super::{Logs, Operator, STH};
-    use crate::client::{CtClient, HttpCtClient, LogEntry, Operators};
+    use super::{HttpCtClient, Logs, Operator, STH};
+    use crate::client::{CtClient, HttpCtClientBuilder, LogEntry, Operators};
+    use again::RetryPolicy;
     use std::time::Duration;
     use wiremock::{
         matchers::{method, path, query_param},
@@ -213,7 +205,13 @@ mod test {
     const LEAF_INPUT: &str = include_str!("../resources/test/leaf_input_with_cert");
 
     fn default_client(uri: &str) -> HttpCtClient {
-        HttpCtClient::new(uri, Duration::from_millis(1), Duration::from_secs(20))
+        HttpCtClientBuilder::default()
+            .base_url(uri)
+            .log_operators_base_url(uri)
+            .timeout(Duration::from_millis(10))
+            .retry_policy(RetryPolicy::fixed(Duration::from_millis(1)).with_max_retries(10))
+            .build()
+            .unwrap()
     }
 
     #[tokio::test]
@@ -382,7 +380,15 @@ mod test {
             .mount(&mock_server)
             .await;
         let uri = &mock_server.uri();
-        let client = HttpCtClient::new(uri, Duration::from_millis(10), Duration::from_millis(10));
+
+        let policy = RetryPolicy::fixed(Duration::from_millis(10)).with_max_retries(10);
+        let client = HttpCtClientBuilder::default()
+            .base_url(uri.as_ref())
+            .log_operators_base_url(uri.as_ref())
+            .retry_policy(policy)
+            .timeout(Duration::from_millis(10))
+            .build()
+            .unwrap();
         let result = client.get_tree_size().await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 0);
@@ -419,7 +425,14 @@ mod test {
             .mount(&mock_server)
             .await;
         let uri = &mock_server.uri();
-        let client = HttpCtClient::new(uri, Duration::from_millis(10), Duration::from_millis(10));
+        let policy = RetryPolicy::fixed(Duration::from_millis(10)).with_max_retries(10);
+        let client = HttpCtClientBuilder::default()
+            .base_url(uri.as_ref())
+            .log_operators_base_url(uri.as_ref())
+            .retry_policy(policy)
+            .timeout(Duration::from_millis(10))
+            .build()
+            .unwrap();
         let result = client.get_entries(0, 1).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), body);
@@ -443,7 +456,7 @@ mod test {
             .await;
         let uri = mock_server.uri();
         let client = default_client(&uri);
-        let result = client.list_log_operators(&uri).await;
+        let result = client.list_log_operators().await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), body);
     }

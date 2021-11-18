@@ -1,7 +1,9 @@
 pub mod client;
 mod consumer;
 mod parser;
-use crate::client::{CtClient, HttpCtClient};
+use again::RetryPolicy;
+
+use crate::client::{CtClient, HttpCtClientBuilder};
 use std::time::Duration;
 
 const CT_LOGS_URL: &str = "https://ct.googleapis.com/logs/argon2021/ct/v1";
@@ -15,14 +17,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //        .connect("nats://localhost:4222")
     //        .await?;
     let (tx, mut rx) = tokio::sync::mpsc::channel::<consumer::Message>(100);
-    let client = HttpCtClient::new(
-        CT_LOGS_URL,
-        Duration::from_millis(500),
-        Duration::from_secs(20),
-    );
-    let operators = client
-        .list_log_operators("https://www.gstatic.com/ct/log_list/v2")
-        .await?;
+    let client = HttpCtClientBuilder::default()
+        .base_url(CT_LOGS_URL)
+        .retry_policy(RetryPolicy::fixed(Duration::from_millis(10)).with_max_retries(10))
+        .timeout(Duration::from_secs(20))
+        .build()?;
+
+    let operators = client.list_log_operators().await?;
+
     for operator in operators.operators {
         println!("{:#?}", operator.name);
         for log in operator.logs {
