@@ -35,19 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let handle = tokio::spawn(consumer::consume(client, tx));
     while let Some(msg) = rx.recv().await {
         match msg.result {
-            Ok(result) => {
-                for domain in result {
-                    let bytes = domain.as_bytes();
-                    let len = bytes.len();
-                    // stay below 1MiB limit
-                    if len < 1048576 {
-                        // let publish_result = nc.publish("domains", bytes).await;
-                        // if let Err(err) = publish_result {
-                        //     eprintln!("Error occurred publishing nats message: {:?}", err);
-                        // }
-                    }
-                }
-            }
+            Ok(result) => println!("{:#?}", result),
             Err(_) => eprintln!("failed"),
         }
     }

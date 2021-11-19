@@ -1,5 +1,5 @@
-use crate::client::CtClient;
 use crate::parser::parse_logs;
+use crate::{client::CtClient, parser::CertDetails};
 use anyhow::Result;
 use futures::stream::{unfold, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
@@ -24,7 +24,7 @@ pub struct NamePart {
 #[derive(Debug)]
 pub struct Message {
     pub position: usize,
-    pub result: anyhow::Result<Vec<String>>,
+    pub result: anyhow::Result<CertDetails>,
 }
 
 pub async fn consume(client: impl CtClient, tx: Sender<Message>) -> Result<()> {
@@ -122,7 +122,7 @@ mod test {
         let mut count = 0;
         while let Some(msg) = rx.recv().await {
             assert!(msg.result.is_ok());
-            for _ in msg.result.unwrap() {
+            for _ in msg.result.unwrap().san {
                 count += 1;
             }
         }

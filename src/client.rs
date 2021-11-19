@@ -1,7 +1,8 @@
 use again::{self, RetryPolicy};
+use anyhow::anyhow;
 use async_trait::async_trait;
 use derive_builder::Builder;
-use reqwest::Client;
+use reqwest::{Client, RequestBuilder};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -108,6 +109,7 @@ pub trait CtClient {
 #[builder(setter(into))]
 pub struct HttpCtClient<'a> {
     base_url: &'a str,
+    #[builder(default = "\"https://www.gstatic.com/ct/log_list/v2\"")]
     log_operators_base_url: &'a str,
     #[builder(default = "Client::new()")]
     client: Client,
@@ -117,50 +119,53 @@ pub struct HttpCtClient<'a> {
     retry_policy: RetryPolicy,
 }
 
-#[async_trait]
-impl<'a> CtClient for HttpCtClient<'a> {
-    async fn list_log_operators(&self) -> anyhow::Result<Operators> {
-        let operators = self
+impl HttpCtClient<'_> {
+    async fn retryable_request<T>(&self, builder: RequestBuilder) -> anyhow::Result<T>
+    where
+        T: serde::de::DeserializeOwned + Send + Sync,
+    {
+        Ok(self
             .retry_policy
             .retry_if(
                 || async {
-                    self.client
-                        .get(&format!("{}/log_list.json", self.log_operators_base_url))
+                    builder
+                        .try_clone()
+                        .ok_or_else(|| anyhow!("clone error"))
+                        .unwrap() // TODO: remove this and enum the error we retry on, failing on this one
                         .timeout(self.timeout)
                         .send()
                         .await
                         .and_then(|response| response.error_for_status())?
-                        .json::<Operators>()
+                        .json::<T>()
                         .await
                 },
                 |err: &reqwest::Error| {
                     reqwest::Error::is_status(err) || reqwest::Error::is_timeout(err)
                 },
             )
-            .await?;
-        Ok(operators)
+            .await?)
+    }
+}
+
+#[async_trait]
+impl<'a> CtClient for HttpCtClient<'a> {
+    async fn list_log_operators(&self) -> anyhow::Result<Operators> {
+        self.retryable_request(
+            self.client
+                .get(&format!("{}/log_list.json", self.log_operators_base_url)),
+        )
+        .await
     }
 
     async fn get_entries(&self, start: usize, end: usize) -> anyhow::Result<Logs> {
         let mut logs = self
-            .retry_policy
-            .retry_if(
-                || async {
-                    self.client
-                        .get(&format!("{}/get-entries", self.base_url))
-                        .query(&[("start", start), ("end", end)])
-                        .timeout(self.timeout)
-                        .send()
-                        .await
-                        .and_then(|response| response.error_for_status())?
-                        .json::<Logs>()
-                        .await
-                },
-                |err: &reqwest::Error| {
-                    reqwest::Error::is_status(err) || reqwest::Error::is_timeout(err)
-                },
+            .retryable_request::<Logs>(
+                self.client
+                    .get(&format!("{}/get-entries", self.base_url))
+                    .query(&[("start", start), ("end", end)]),
             )
             .await?;
+
         while logs.entries.len() < end - start + 1 {
             let len = logs.entries.len();
             let new_start = start + len;
@@ -171,23 +176,10 @@ impl<'a> CtClient for HttpCtClient<'a> {
     }
 
     async fn get_tree_size(&self) -> anyhow::Result<usize> {
-        let response = self
-            .retry_policy
-            .retry_if(
-                || async {
-                    self.client
-                        .get(&format!("{}/get-sth", self.base_url))
-                        .timeout(self.timeout)
-                        .send()
-                        .await
-                        .and_then(|response| response.error_for_status())
-                },
-                |err: &reqwest::Error| {
-                    reqwest::Error::is_status(err) || reqwest::Error::is_timeout(err)
-                },
-            )
-            .await?;
-        Ok(response.json::<STH>().await?.tree_size)
+        Ok(self
+            .retryable_request::<STH>(self.client.get(&format!("{}/get-sth", self.base_url)))
+            .await?
+            .tree_size)
     }
 }
 
